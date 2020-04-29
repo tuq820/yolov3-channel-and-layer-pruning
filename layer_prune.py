@@ -34,7 +34,7 @@ if __name__ == '__main__':
     print('\nloaded weights from ',opt.weights)
 
 
-    eval_model = lambda model:test(model=model,cfg=opt.cfg, data=opt.data)
+    eval_model = lambda model:test(model=model,cfg=opt.cfg, data=opt.data, batch_size=16, img_size=img_size)
     obtain_num_parameters = lambda model:sum([param.nelement() for param in model.parameters()])
 
     with torch.no_grad():
@@ -52,10 +52,18 @@ if __name__ == '__main__':
     sorted_bn = torch.sort(bn_weights)[0]
 
 
-    highest_thre = torch.zeros(len(shortcut_idx))
+    # highest_thre = torch.zeros(len(shortcut_idx))
+    # for i, idx in enumerate(shortcut_idx):
+    #     highest_thre[i] = model.module_list[idx][1].weight.data.abs().max().clone()
+    # _, sorted_index_thre = torch.sort(highest_thre)
+    
+    #这里更改了选层策略，由最大值排序改为均值排序，均值一般表现要稍好，但不是绝对，可以自己切换尝试；前面注释的四行为原策略。
+    bn_mean = torch.zeros(len(shortcut_idx))
     for i, idx in enumerate(shortcut_idx):
-        highest_thre[i] = model.module_list[idx][1].weight.data.abs().max().clone()
-    _, sorted_index_thre = torch.sort(highest_thre)
+        bn_mean[i] = model.module_list[idx][1].weight.data.abs().mean().clone()
+    _, sorted_index_thre = torch.sort(bn_mean)
+    
+    
     prune_shortcuts = torch.tensor(shortcut_idx)[[sorted_index_thre[:opt.shortcuts]]]
     prune_shortcuts = [int(x) for x in prune_shortcuts]
 
@@ -124,15 +132,31 @@ if __name__ == '__main__':
     compact_module_defs = deepcopy(model.module_defs)
 
 
-    for module_def in compact_module_defs:
+    for j, module_def in enumerate(compact_module_defs):    
         if module_def['type'] == 'route':
             from_layers = [int(s) for s in module_def['layers'].split(',')]
-            if len(from_layers) == 2:
+            if len(from_layers) == 1 and from_layers[0] > 0:
                 count = 0
                 for i in index_prune:
-                    if i <= from_layers[1]:
+                    if i <= from_layers[0]:
                         count += 1
-                from_layers[1] = from_layers[1] - count
+                from_layers[0] = from_layers[0] - count
+                from_layers = str(from_layers[0])
+                module_def['layers'] = from_layers
+
+            elif len(from_layers) == 2:
+                count = 0
+                if from_layers[1] > 0:
+                    for i in index_prune:
+                        if i <= from_layers[1]:
+                            count += 1
+                    from_layers[1] = from_layers[1] - count
+                else:
+                    for i in index_prune:
+                        if i > j + from_layers[1] and i < j:
+                            count += 1
+                    from_layers[1] = from_layers[1] + count
+
                 from_layers = ', '.join([str(s) for s in from_layers])
                 module_def['layers'] = from_layers
 
